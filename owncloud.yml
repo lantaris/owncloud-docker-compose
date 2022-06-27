@@ -1,0 +1,109 @@
+version: "3"
+
+volumes:
+  files:
+    driver: local
+    name: owncloud_files
+  mysql:
+    driver: local
+    name: owncloud_mysql
+  redis:
+    driver: local
+    name: owncloud_redis
+  certbot:
+    driver: local
+    name: owncloud_certbot
+  web-root:
+    driver: local
+    name: owncloud_web-root
+
+services:
+  owncloud:
+    image: owncloud/server:${OWNCLOUD_VERSION}
+    container_name: owncloud_server
+    restart: always
+#    ports:
+#      - ${HTTP_PORT}:8080
+    depends_on:
+      - mariadb
+      - redis
+    environment:
+      - OWNCLOUD_DOMAIN=${OWNCLOUD_DOMAIN}
+      - OWNCLOUD_DB_TYPE=mysql
+      - OWNCLOUD_DB_NAME=owncloud
+      - OWNCLOUD_DB_USERNAME=${DB_USERNAME}
+      - OWNCLOUD_DB_PASSWORD=${DB_PASSWORD}
+      - OWNCLOUD_DB_HOST=mariadb
+      - OWNCLOUD_ADMIN_USERNAME=${ADMIN_USERNAME}
+      - OWNCLOUD_ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - OWNCLOUD_MYSQL_UTF8MB4=true
+      - OWNCLOUD_REDIS_ENABLED=true
+      - OWNCLOUD_REDIS_HOST=redis
+    healthcheck:
+      test: ["CMD", "/usr/bin/healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    volumes:
+      - files:/mnt/data
+
+  mariadb:
+    image: mariadb:10.5
+    container_name: owncloud_mariadb
+    restart: always
+    environment:
+      - MYSQL_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
+      - MYSQL_USER=${DB_USERNAME}
+      - MYSQL_PASSWORD=${DB_PASSWORD}
+      - MYSQL_DATABASE=owncloud
+    command: ["--max-allowed-packet=128M", "--innodb-log-file-size=64M"]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-u", "root", "--password=${DB_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - mysql:/var/lib/mysql
+
+  redis:
+    image: redis:6
+    container_name: owncloud_redis
+    restart: always
+    command: ["--databases", "1"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - redis:/data
+
+  nginx:
+    image: nginx:1.21.6
+    restart: always    
+    volumes:
+      - web-root:/var/www/html    
+      - ./work/etc/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./work/cert/etc:/etc/letsencrypt
+      - ./work/cert/var:/var/lib/letsencrypt
+      - ./work/cert/dhparam-2048.pem:/etc/ssl/certs/dhparam-2048.pem
+    ports:
+      - "443:443"
+      - "80:80"
+    depends_on:
+      - owncloud
+    entrypoint: "/bin/sh -c 'while :; do sleep 6h; nginx -s reload; done & nginx -g \"daemon off;\"'"
+
+  certbot:
+    image: certbot/certbot
+    restart: always    
+    container_name: certbot
+    volumes:
+      - web-root:/var/www/html
+      - ./work/cert/etc:/etc/letsencrypt
+      - ./work/cert/var/lib:/var/lib/letsencrypt
+      - ./work/cert/var/log:/var/log/letsencrypt
+    depends_on:
+      - nginx
+    entrypoint: "/bin/sh -c 'while :; do certbot renew --webroot --webroot-path=/var/www/html; sleep 12h; done'"
+
